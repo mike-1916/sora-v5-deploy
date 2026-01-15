@@ -20,7 +20,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 try:
     API_KEY = st.secrets["API_KEY"]
 except:
-    [cite_start]API_KEY = "sk-57e392622e3f45c0af35bde21611b0f8" # 默认保底Key [cite: 1]
+    # ⚠️ 请确保这里填入的是你真实的 sk-xxx Key
+    API_KEY = "sk-57e392622e3f45c0af35bde21611b0f8" 
 
 HOST = "https://grsai.dakka.com.cn" 
 
@@ -30,7 +31,7 @@ LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 LLM_MODEL = "glm-4-flash"                                 
 # ===============================================
 
-st.set_page_config(page_title="Sora 视频工坊 v9.6", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="Sora 视频工坊 v9.7", layout="wide", page_icon="🎬")
 
 # --- 🛠️ 辅助函数 ---
 def encode_image_to_base64(uploaded_files):
@@ -54,7 +55,7 @@ def encode_image_to_base64(uploaded_files):
         return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"
     except: return None
 
-# --- 📡 核心 API 逻辑 (流式兼容加固版) ---
+# --- 📡 API 核心逻辑 ---
 
 def get_common_headers():
     return {
@@ -73,33 +74,33 @@ def submit_video_task(prompt, model, aspect_ratio, duration, size, img_data=None
     if img_data: payload["url"] = img_data
     
     try:
-        # 🔥 设置 stream=True 兼容流式返回
+        # 使用 stream=True 兼容流式返回数据
         response = requests.post(url, headers=get_common_headers(), json=payload, timeout=60, verify=False, stream=True)
         st.session_state['last_raw_response'] = ""
         
-        # 逐行读取，寻找第一条包含 id 的数据
         for line in response.iter_lines():
             if line:
                 decoded_line = line.decode('utf-8')
                 st.session_state['last_raw_response'] += decoded_line + "\n"
                 
-                # 去掉 SSE 前缀 "data: "
+                # 剥离 "data: " 前缀提取真实 JSON
                 clean_json = decoded_line.replace("data: ", "").strip()
                 try:
                     data = json.loads(clean_json)
-                    if "id" in data or ("data" in data and "id" in data["data"]):
-                        return data # 成功获取到包含ID的JSON
+                    # 只要提取到 id 即可立即返回进行查询
+                    if "id" in data: return data
+                    if "data" in data and "id" in data["data"]: return data["data"]
                 except:
-                    continue # 如果这行不是有效JSON则继续找下一行
+                    continue
         
-        return {"error": "未能在流式回执中提取任务ID", "data": st.session_state['last_raw_response']}
+        return {"error": "解析失败", "data": st.session_state['last_raw_response']}
     except Exception as e:
         return {"error": str(e), "data": None}
 
 def check_result(task_id):
     url = f"{HOST}/v1/draw/result"
     try:
-        # 🔥 修正点：参数名必须是 'id'
+        # 🔥 获取结果接口必须使用 id 参数
         res = requests.post(url, headers=get_common_headers(), json={"id": task_id}, timeout=30, verify=False)
         return res.json()
     except Exception as e:
@@ -128,14 +129,14 @@ def merge_av(v, a, out):
     except: return False
 
 def save_to_history(record):
-    if not os.path.exists("history.json"): history = []
-    else:
+    history = []
+    if os.path.exists("history.json"):
         with open("history.json", "r") as f: history = json.load(f)
     history.append(record)
     with open("history.json", "w") as f: json.dump(history, f, indent=2)
 
 # --- 🖥️ UI 界面 ---
-st.markdown("## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v9.6 (流式兼容版)</span>", unsafe_allow_html=True)
+st.markdown("## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v9.7 (语法修复版)</span>", unsafe_allow_html=True)
 c1, c2 = st.columns([1, 1.5])
 
 VOICE_MAP = {"Thai (泰语)": "th-TH-NiwatNeural", "English (英语)": "en-US-ChristopherNeural", "Malay (马来语)": "ms-MY-OsmanNeural"}
@@ -152,35 +153,33 @@ with c1:
         if s: st.session_state['active_script'] = s
     a_script = st.text_area("口播文案", value=st.session_state.get('active_script', ""), height=90)
     
-    files = st.file_uploader("产品多角度图片", accept_multiple_files=True)
+    files = st.file_uploader("产品图 (支持多选拼图)", accept_multiple_files=True)
     b64_data = encode_image_to_base64(files)
     
     start_btn = st.button("🚀 启动视频生成", type="primary", use_container_width=True)
 
-with c2:
+with col2:
     st.subheader("🎬 实时制片监控")
     if start_btn:
         with st.status("正在处理任务...", expanded=True) as status:
-            status.write("📡 正在向服务器提交任务并解析流数据...")
+            status.write("📡 提交任务中...")
             full_prompt = f"Language: {lang_opt}. Visual: {v_script}. Audio: {a_script}"
             res = submit_video_task(full_prompt, "sora-2", "16:9", batch_dur, "large" if "高清" in size_label else "small", b64_data)
             
             if "error" in res:
                 status.update(label="❌ 提交失败", state="error")
-                st.error(f"服务器报错: {res['error']}")
-                with st.expander("查看接收到的原始原始流数据"):
+                st.error(f"解析错误: {res['error']}")
+                with st.expander("查看服务器返回原始流"):
                     st.code(st.session_state.get('last_raw_response', '无内容'))
                 st.stop()
             
-            # 从复杂的流响应中提取 ID
-            data_part = res.get("data") if isinstance(res.get("data"), dict) else res
-            tid = data_part.get("id") or data_part.get("task_id")
+            tid = res.get("id") or res.get("task_id")
             
             if tid:
-                status.write(f"✅ 任务提交成功 ID: {tid}")
+                status.write(f"✅ 任务成功 ID: {tid}")
                 v_url = None
                 bar = st.progress(0)
-                for i in range(120): # 最多等8分钟
+                for i in range(120):
                     time.sleep(4)
                     r = check_result(tid)
                     check_data = r.get("data", {})
@@ -192,28 +191,25 @@ with c2:
                         v_url = results[0].get("url") if results else check_data.get("url")
                         break
                     if s in ["FAILED", "failed"]: 
-                        st.error("生成失败"); break
+                        st.error("渲染失败"); break
                 
                 if v_url:
-                    status.update(label="✨ 画面生成完成", state="complete")
-                    st.info("👇 Sora 原始视频 (无声版)")
+                    status.update(label="✨ 生成完成", state="complete")
                     st.video(v_url)
                     
-                    # 后期合成逻辑
+                    # 后期合成
                     os.makedirs("temp", exist_ok=True)
                     v_p, a_p, f_p = f"temp/{tid}.mp4", f"temp/{tid}.mp3", f"temp/{tid}_f.mp4"
                     try:
                         with open(v_p, 'wb') as f: f.write(requests.get(v_url).content)
                         asyncio.run(generate_tts(a_script, VOICE_MAP[lang_opt], a_p))
                         if merge_av(v_p, a_p, f_p):
-                            st.success("✅ 有声版制作成功！")
+                            st.success("✅ 合成成功！")
                             st.video(f_p)
-                            with open(f_p, "rb") as f: st.download_button("⬇️ 下载成品", f, file_name=f"Final_{tid}.mp4")
+                            with open(f_p, "rb") as f: st.download_button("⬇️ 下载", f, file_name=f"{tid}.mp4")
                         else:
-                            st.warning("⚠️ 合成失败 (ffmpeg未就绪)，请下载原视频")
+                            st.warning("合成失败，请下载无声版")
                     except Exception as e:
-                        st.error(f"后期处理出错: {e}")
+                        st.error(f"处理错误: {e}")
                     
                     save_to_history({"task_id": tid, "product": product, "time": datetime.now().strftime("%H:%M"), "video_url": v_url})
-            else:
-                st.error("解析任务ID失败")
