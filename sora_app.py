@@ -19,7 +19,7 @@ except:
     API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" 
 HOST = "https://grsai.dakka.com.cn" 
 
-LLM_API_KEY = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxx" 
+LLM_API_KEY = "f87cd651378147b58a12828ad95465ee.9yUBYWw6o3DIGWKW" 
 LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"     
 LLM_MODEL = "glm-4-flash"                                 
 # ===============================================
@@ -280,3 +280,4 @@ with col2:
 
     else:
         st.markdown("<div style='text-align:center; color:gray; padding:20px;'>👋 准备就绪</div>", unsafe_allow_html=True)
+
