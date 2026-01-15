@@ -6,8 +6,9 @@ import os
 from datetime import datetime
 
 # ================= 配置区域 =================
-API_KEY = "sk-57e392622e3f45c0af35bde21611b0f8" 
-HOST = "https://grsai.dakka.com.cn" 
+# API_KEY = "sk-xxx"  <-- 这一行删掉或注释掉
+API_KEY = st.secrets["API_KEY"]  # <-- 改成这一行！从后台读取密码
+HOST = "https://grsaiapi.com"
 # ===========================================
 
 st.set_page_config(page_title="Sora 视频工坊 v5.0", layout="wide", page_icon="🎬")
@@ -250,4 +251,5 @@ with col_preview:
             <h3>Sora 视频工坊</h3>
             <p>支持断点续传 | 历史回溯 | 脚本生成</p>
         </div>
+
         """, unsafe_allow_html=True)
