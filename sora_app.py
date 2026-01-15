@@ -12,17 +12,20 @@ from datetime import datetime
 import edge_tts
 from moviepy.editor import VideoFileClip, AudioFileClip
 
-# ================= 配置区域 =================
-# API_KEY = "sk-xxx"  <-- 这一行删掉或注释掉
-API_KEY = st.secrets["API_KEY"]  # <-- 改成这一行！从后台读取密码
+# ================= ⚠️ 配置区域 =================
+try:
+    API_KEY = st.secrets["API_KEY"]
+except:
+    API_KEY = "sk-57e392622e3f45c0af35bde21611b0f8" 
 HOST = "https://grsai.dakka.com.cn" 
 
+# 智谱 AI 配置 (用于写脚本)
 LLM_API_KEY = "f87cd651378147b58a12828ad95465ee.9yUBYWw6o3DIGWKW" 
 LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"     
 LLM_MODEL = "glm-4-flash"                                 
 # ===============================================
 
-st.set_page_config(page_title="Sora 视频工坊 v8.8", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="Sora 视频工坊 v8.9", layout="wide", page_icon="🛡️")
 
 # === 🛠️ 核心功能 ===
 
@@ -53,7 +56,7 @@ def stitch_images_to_base64(uploaded_files):
         return new_image, f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode('utf-8')}"
     except: return None, None
 
-# 2. 写脚本
+# 2. LLM 写脚本
 def generate_timed_script(product_name, target_lang, duration_sec):
     if "xxxx" in LLM_API_KEY:
         return None, "❌ 请配置智谱 API Key"
@@ -89,7 +92,7 @@ def merge_video_audio(video_path, audio_path, output_path):
         audio_clip.close()
         return True
     except Exception as e:
-        print(f"合成报错: {e}") # 打印错误到后台
+        print(f"合成报错: {e}") 
         return False
 
 # 5. API 提交
@@ -97,7 +100,9 @@ def check_result(task_id):
     url = f"{HOST}/v1/draw/result"
     headers = {"Authorization": f"Bearer {API_KEY}"}
     try:
-        return requests.post(url, headers=headers, json={"task_id": task_id}, timeout=30).json()
+        # 🔥 关键调试：打印原始返回数据
+        res = requests.post(url, headers=headers, json={"task_id": task_id}, timeout=30)
+        return res.json()
     except Exception as e:
         return {"error": str(e)}
 
@@ -140,7 +145,7 @@ with st.sidebar:
                     st.session_state['current_record'] = item
 
 # === 主界面 ===
-st.markdown("## 🏭 Sora 视频工坊 <span style='font-size:0.8rem; color:red'>v8.8 (稳健防丢版)</span>", unsafe_allow_html=True)
+st.markdown("## 🏭 Sora 视频工坊 <span style='font-size:0.8rem; color:red'>v8.9 (稳健防丢版)</span>", unsafe_allow_html=True)
 
 col1, col2 = st.columns([1, 1.5])
 
@@ -204,7 +209,10 @@ with col2:
             with st.status(f"正在制作...", expanded=True) as status:
                 status.write("🎥 正在渲染画面...")
                 res = submit_video_task(final_prompt, "sora-2", batch_ratio, batch_dur, batch_size, final_base64)
-                task_id = res.get("data", {}).get("task_id") or res.get("task_id")
+                
+                # 兼容性处理：不同接口返回的ID字段可能不同
+                data_part = res.get("data") or {}
+                task_id = data_part.get("task_id") or res.get("task_id") or data_part.get("id")
                 
                 if task_id:
                     video_url = None
@@ -225,7 +233,7 @@ with col2:
                     
                     if video_url:
                         # 🔥🔥🔥 改进点：拿到视频链接后，立即展示，防止后面合成报错导致啥都看不到
-                        status.write("✅ 画面生成成功！正在尝试配音合成...")
+                        status.write("✅ 画面生成成功！(请先查看下方无声原片)")
                         st.info("👇 这是 Sora 生成的原始画面 (无声版)")
                         st.video(video_url) # 先展示无声版保底
                         
@@ -266,7 +274,7 @@ with col2:
                             "video_url": video_url, "script": voice_text
                         })
                     else:
-                        st.error("未能获取视频 URL")
+                        st.error(f"未能获取视频 URL, API返回: {check}")
                 else:
                     st.error(f"提交失败: {res}")
 
@@ -278,5 +286,3 @@ with col2:
 
     else:
         st.markdown("<div style='text-align:center; color:gray; padding:20px;'>👋 准备就绪</div>", unsafe_allow_html=True)
-
-
