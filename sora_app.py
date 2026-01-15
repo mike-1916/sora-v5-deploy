@@ -25,7 +25,7 @@ LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 LLM_MODEL = "glm-4-flash"                                 
 # ===============================================
 
-st.set_page_config(page_title="Sora 视频工坊 v8.9", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="Sora 视频工坊 v9.0", layout="wide", page_icon="✅")
 
 # === 🛠️ 核心功能 ===
 
@@ -78,7 +78,7 @@ async def generate_tts_audio(text, voice, output_filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(output_filename)
 
-# 4. 合成 (增加容错)
+# 4. 合成
 def merge_video_audio(video_path, audio_path, output_path):
     try:
         video_clip = VideoFileClip(video_path)
@@ -95,13 +95,14 @@ def merge_video_audio(video_path, audio_path, output_path):
         print(f"合成报错: {e}") 
         return False
 
-# 5. API 提交
+# 5. 🔥 API 提交与查询 (重点修正)
 def check_result(task_id):
     url = f"{HOST}/v1/draw/result"
     headers = {"Authorization": f"Bearer {API_KEY}"}
     try:
-        # 🔥 关键调试：打印原始返回数据
-        res = requests.post(url, headers=headers, json={"task_id": task_id}, timeout=30)
+        # 🔥🔥🔥 修正点：参数名必须是 'id'，不是 'task_id'
+        # 根据文档 image_8a4103.png
+        res = requests.post(url, headers=headers, json={"id": task_id}, timeout=30)
         return res.json()
     except Exception as e:
         return {"error": str(e)}
@@ -145,7 +146,7 @@ with st.sidebar:
                     st.session_state['current_record'] = item
 
 # === 主界面 ===
-st.markdown("## 🏭 Sora 视频工坊 <span style='font-size:0.8rem; color:red'>v8.9 (稳健防丢版)</span>", unsafe_allow_html=True)
+st.markdown("## 🏭 Sora 视频工坊 <span style='font-size:0.8rem; color:red'>v9.0 (接口修正版)</span>", unsafe_allow_html=True)
 
 col1, col2 = st.columns([1, 1.5])
 
@@ -210,20 +211,23 @@ with col2:
                 status.write("🎥 正在渲染画面...")
                 res = submit_video_task(final_prompt, "sora-2", batch_ratio, batch_dur, batch_size, final_base64)
                 
-                # 兼容性处理：不同接口返回的ID字段可能不同
+                # 🔥🔥🔥 修正点：从 data 中提取 id (根据文档 image_79fb2b.png)
+                # 兼容不同层级，优先 data.id
                 data_part = res.get("data") or {}
-                task_id = data_part.get("task_id") or res.get("task_id") or data_part.get("id")
+                task_id = data_part.get("id") or data_part.get("task_id") or res.get("task_id")
                 
                 if task_id:
                     video_url = None
                     bar = status.progress(0)
                     for i in range(60):
                         time.sleep(3)
-                        check = check_result(task_id)
+                        check = check_result(task_id) # 这里现在会发送 {"id": ...} 了
                         s = check.get("data", {}).get("status")
+                        
                         bar.progress(min(i*2+10, 95))
                         if s in ["SUCCESS", "COMPLETED", "succeeded"]:
                             d = check.get("data", {})
+                            # 根据文档 image_79fb0f.png 提取结果
                             if d.get("results"): video_url = d["results"][0].get("url")
                             if not video_url: video_url = d.get("url")
                             break
@@ -232,49 +236,42 @@ with col2:
                             st.stop()
                     
                     if video_url:
-                        # 🔥🔥🔥 改进点：拿到视频链接后，立即展示，防止后面合成报错导致啥都看不到
-                        status.write("✅ 画面生成成功！(请先查看下方无声原片)")
-                        st.info("👇 这是 Sora 生成的原始画面 (无声版)")
-                        st.video(video_url) # 先展示无声版保底
+                        status.write("✅ 画面生成成功！")
+                        st.info("👇 Sora 原始画面")
+                        st.video(video_url)
                         
-                        # 尝试合成音频
+                        # 配音与合成逻辑
+                        status.write("🗣️ 合成音频中...")
                         os.makedirs("temp", exist_ok=True)
                         audio_path = f"temp/{task_id}.mp3"
                         video_path = f"temp/{task_id}.mp4"
                         final_path = f"temp/{task_id}_final.mp4"
                         
                         try:
-                            # 下载视频
                             v_data = requests.get(video_url).content
                             with open(video_path, 'wb') as f: f.write(v_data)
                             
-                            # 生成音频
                             asyncio.run(generate_tts_audio(voice_text, voice_code, audio_path))
                             
-                            # 合成
                             if merge_video_audio(video_path, audio_path, final_path):
                                 status.update(label="🎉 完美出片！", state="complete")
-                                st.success("✅ 有声合成版已就绪：")
-                                st.video(final_path) # 展示有声版
-                                
+                                st.success("✅ 有声版已就绪：")
+                                st.video(final_path)
                                 with open(final_path, "rb") as f:
                                     st.download_button("⬇️ 下载有声视频", f, file_name=f"Final_{task_id}.mp4")
                             else:
-                                status.update(label="⚠️ 合成失败 (显示原片)", state="error")
-                                st.warning("音频合成失败 (可能缺少 ffmpeg)，请直接下载上方的【无声原片】。")
+                                st.warning("合成失败 (请检查 ffmpeg)，但上方原片已保存")
                                 
                         except Exception as e:
-                            status.update(label="⚠️ 处理出错", state="error")
                             st.error(f"合成过程报错: {e}")
                         
-                        # 无论如何都保存记录
                         save_to_history({
                             "task_id": task_id, "product": product_name, 
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "video_url": video_url, "script": voice_text
                         })
                     else:
-                        st.error(f"未能获取视频 URL, API返回: {check}")
+                        st.error(f"无法获取视频链接，最后状态: {check}")
                 else:
                     st.error(f"提交失败: {res}")
 
@@ -285,4 +282,4 @@ with col2:
         st.caption(f"脚本：{rec.get('script')}")
 
     else:
-        st.markdown("<div style='text-align:center; color:gray; padding:20px;'>👋 准备就绪</div>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align:center; color:gray; padding:20px;'>👋 接口已修复，请重新生成</div>", unsafe_allow_html=True)
