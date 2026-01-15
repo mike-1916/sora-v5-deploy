@@ -7,124 +7,77 @@ import base64
 import asyncio
 import io
 import math
-from PIL import Image # 图片处理核心库
+from PIL import Image
 from datetime import datetime
 import edge_tts
 from moviepy.editor import VideoFileClip, AudioFileClip
 
-# ================= 配置区域 =================
-# API_KEY = "sk-xxx"  <-- 这一行删掉或注释掉
-API_KEY = st.secrets["API_KEY"]  # <-- 改成这一行！从后台读取密码
-HOST = "https://grsai.dakka.com.cn"
+# ================= ⚠️ 配置区域 =================
+try:
+    API_KEY = st.secrets["API_KEY"]
+except:
+    API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" 
+HOST = "https://grsai.dakka.com.cn" 
 
-# 智谱 AI 配置 (用于写脚本)
-LLM_API_KEY = "f87cd651378147b58a12828ad95465ee.9yUBYWw6o3DIGWKW" 
+LLM_API_KEY = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxx" 
 LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"     
 LLM_MODEL = "glm-4-flash"                                 
 # ===============================================
 
-st.set_page_config(page_title="Sora 视频工坊 v8.6", layout="wide", page_icon="🎬")
-
-# === 🗣️ 语音库 ===
-VOICE_MAP = {
-    "English (英语)": "en-US-ChristopherNeural",
-    "Chinese (中文)": "zh-CN-YunxiNeural",
-    "Malay (马来语)": "ms-MY-OsmanNeural",
-    "Indonesian (印尼语)": "id-ID-ArdiNeural",
-    "Vietnamese (越南语)": "vi-VN-NamMinhNeural",
-    "Thai (泰语)": "th-TH-NiwatNeural",
-    "Filipino (菲律宾语)": "fil-PH-AngeloNeural"
-}
+st.set_page_config(page_title="Sora 视频工坊 v8.8", layout="wide", page_icon="🛡️")
 
 # === 🛠️ 核心功能 ===
 
-# 1. 🔥🔥🔥 智能拼图引擎 (自动处理 1-9 张图)
+# 1. 拼图
 def stitch_images_to_base64(uploaded_files):
     if not uploaded_files: return None, None
     try:
         images = [Image.open(f) for f in uploaded_files]
         count = len(images)
-        
-        # 单张图直接返回
         if count == 1:
             buffered = io.BytesIO()
             images[0].save(buffered, format="PNG")
             return images[0], f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode('utf-8')}"
-
-        # 多张图：计算网格 (例如 6张 -> 3列x2行)
+        
         cols = math.ceil(math.sqrt(count))
         rows = math.ceil(count / cols)
-        
-        # 统一把所有图片缩放到 512x512 以便拼接 (保持比例居中)
         cell_size = 512
-        grid_w = cols * cell_size
-        grid_h = rows * cell_size
-        
-        # 创建白底大画布
-        new_image = Image.new('RGB', (grid_w, grid_h), (255, 255, 255))
+        new_image = Image.new('RGB', (cols * cell_size, rows * cell_size), (255, 255, 255))
         
         for idx, img in enumerate(images):
-            # 计算当前格子的位置
             r = idx // cols
             c = idx % cols
-            x = c * cell_size
-            y = r * cell_size
-            
-            # 缩放图片适应格子
             img.thumbnail((cell_size, cell_size))
-            # 居中粘贴
-            paste_x = x + (cell_size - img.width) // 2
-            paste_y = y + (cell_size - img.height) // 2
-            new_image.paste(img, (paste_x, paste_y))
+            new_image.paste(img, (c * cell_size + (cell_size - img.width)//2, r * cell_size + (cell_size - img.height)//2))
             
-        # 转 Base64
         buffered = io.BytesIO()
         new_image.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-        
-        return new_image, f"data:image/png;base64,{img_str}"
-        
-    except Exception as e:
-        st.error(f"拼图出错: {e}")
-        return None, None
+        return new_image, f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode('utf-8')}"
+    except: return None, None
 
-# 2. LLM 写脚本
-def generate_timed_script(product_name, target_lang):
+# 2. 写脚本
+def generate_timed_script(product_name, target_lang, duration_sec):
     if "xxxx" in LLM_API_KEY:
         return None, "❌ 请配置智谱 API Key"
-        
-    headers = {
-        "Authorization": f"Bearer {LLM_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    system_prompt = (
-        "You are a professional video scriptwriter. "
-        "Write a concise product narration script strictly for a **15-second video**. "
-        "Structure: Hook -> Benefit -> CTA. "
-        f"Output must be in {target_lang} ONLY."
-    )
-    user_prompt = f"Product: {product_name}. Write a 15s sales script in {target_lang}."
+    headers = {"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"}
     
-    payload = {
-        "model": LLM_MODEL,
-        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-        "temperature": 0.7
-    }
+    length_guide = "Short (20-30 words)" if duration_sec <= 10 else "Standard (40-50 words)"
+    system_prompt = f"Write a {duration_sec}s video script in {target_lang}. {length_guide}. Hook->Benefit->CTA."
+    user_prompt = f"Product: {product_name}."
+    
     try:
-        res = requests.post(f"{LLM_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=15)
-        if res.status_code == 200:
-            return res.json()['choices'][0]['message']['content'].strip(), None
-        else:
-            return None, f"API Error: {res.text}"
-    except Exception as e:
-        return None, str(e)
+        res = requests.post(f"{LLM_BASE_URL}/chat/completions", headers=headers, json={
+            "model": LLM_MODEL, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "temperature": 0.7
+        }, timeout=15)
+        return res.json()['choices'][0]['message']['content'].strip(), None
+    except Exception as e: return None, str(e)
 
-# 3. TTS 生成
+# 3. TTS
 async def generate_tts_audio(text, voice, output_filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(output_filename)
 
-# 4. 音画合成
+# 4. 合成 (增加容错)
 def merge_video_audio(video_path, audio_path, output_path):
     try:
         video_clip = VideoFileClip(video_path)
@@ -137,7 +90,9 @@ def merge_video_audio(video_path, audio_path, output_path):
         video_clip.close()
         audio_clip.close()
         return True
-    except: return False
+    except Exception as e:
+        print(f"合成报错: {e}") # 打印错误到后台
+        return False
 
 # 5. API 提交
 def check_result(task_id):
@@ -151,109 +106,106 @@ def check_result(task_id):
 def submit_video_task(prompt, model, aspect_ratio, duration, size, img_data=None):
     url = f"{HOST}/v1/video/sora-video"
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "prompt": prompt, "model": model, "aspect_ratio": aspect_ratio, "duration": duration, "size": size, "expand_prompt": True
-    }
+    payload = {"prompt": prompt, "model": model, "aspect_ratio": aspect_ratio, "duration": duration, "size": size, "expand_prompt": True}
     if img_data: payload["url"] = img_data
     try:
         return requests.post(url, headers=headers, json=payload, timeout=60).json()
     except Exception as e:
         return {"error": str(e), "data": None}
 
+# === 💾 历史记录 ===
+HISTORY_FILE = "history.json"
+def load_history():
+    if not os.path.exists(HISTORY_FILE): return []
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f: return json.load(f)
+    except: return []
+
+def save_to_history(record):
+    history = load_history()
+    if any(h.get('task_id') == record['task_id'] for h in history): return
+    history.append(record)
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+
 # === 侧边栏 ===
 with st.sidebar:
     st.markdown("### 📜 历史记录")
-    st.info("💡 **v8.6 新特性**：支持多图自动拼贴，一次性让 AI 看清产品 6 个角度！")
+    history_list = load_history()
+    if not history_list: st.info("暂无记录")
+    else:
+        for item in reversed(history_list):
+            label = f"🎥 {item.get('time', '')[5:-3]} | {item.get('product')}"
+            with st.expander(label):
+                if st.button("回看", key=f"btn_{item['task_id']}"):
+                    st.session_state['view_mode'] = 'history_video'
+                    st.session_state['current_record'] = item
 
 # === 主界面 ===
-st.markdown("## 🏭 Sora 视频工坊 <span style='font-size:0.8rem; color:red'>v8.6 (终极融合版)</span>", unsafe_allow_html=True)
+st.markdown("## 🏭 Sora 视频工坊 <span style='font-size:0.8rem; color:red'>v8.8 (稳健防丢版)</span>", unsafe_allow_html=True)
 
 col1, col2 = st.columns([1, 1.5])
 
-# --- 左侧：设置 ---
+VOICE_MAP = {
+    "English (英语)": "en-US-ChristopherNeural",
+    "Chinese (中文)": "zh-CN-YunxiNeural",
+    "Malay (马来语)": "ms-MY-OsmanNeural",
+    "Indonesian (印尼语)": "id-ID-ArdiNeural",
+    "Vietnamese (越南语)": "vi-VN-NamMinhNeural",
+    "Thai (泰语)": "th-TH-NiwatNeural",
+    "Filipino (菲律宾语)": "fil-PH-AngeloNeural"
+}
+
 with col1:
     st.subheader("1. 基础设置")
     target_lang_label = st.selectbox("目标语言", list(VOICE_MAP.keys()))
     voice_code = VOICE_MAP[target_lang_label]
     lang_name = target_lang_label.split("(")[0].strip()
-    
     product_name = st.text_input("产品名称", placeholder="例如：美白牙膏")
 
     st.markdown("---")
-    st.subheader("2. 视觉与听觉")
-    
-    # 视觉指令
-    visual_script = st.text_area(
-        "🎥 视觉脚本 (Visual)", 
-        placeholder="例如：赛博朋克风格，特写镜头展示产品细节...",
-        height=100
-    )
+    c1, c2, c3 = st.columns(3)
+    with c1: batch_dur = int(st.selectbox("时长", ["5s", "10s", "15s"]).replace("s",""))
+    with c2: batch_ratio = st.selectbox("比例", ["16:9", "9:16", "1:1"])
+    with c3: 
+        size_label = st.selectbox("画质", ["高清 (Large)", "标准 (Small)"])
+        batch_size = "large" if "高清" in size_label else "small"
 
-    # 口播文案
-    c_gen, c_txt = st.columns([1, 3])
+    st.markdown("---")
+    visual_script = st.text_area("🎥 视觉脚本", placeholder="特写展示...", height=80)
+    
+    c_gen, c_txt = st.columns([1, 2])
     with c_gen:
-        if st.button("✨ 自动写稿", use_container_width=True):
-            if not product_name:
-                st.error("缺产品名")
+        if st.button(f"✨ 生成 {batch_dur}s 文案", use_container_width=True):
+            if not product_name: st.error("缺产品名")
             else:
                 with st.spinner("生成中..."):
-                    script, err = generate_timed_script(product_name, lang_name)
-                    if script:
-                        st.session_state['gen_script_15s'] = script
-                        st.success("已生成")
-                    else:
-                        st.error(err)
+                    script, err = generate_timed_script(product_name, lang_name, batch_dur)
+                    if script: st.session_state['gs'] = script; st.success("已生成")
+                    else: st.error(err)
     with c_txt:
-        voice_text = st.text_area("🗣️ 口播文案 (Audio)", value=st.session_state.get('gen_script_15s', ""), height=100)
+        voice_text = st.text_area("🗣️ 口播文案", value=st.session_state.get('gs', ""), height=100)
     
     st.markdown("---")
-    st.subheader("3. 多图上传 (自动拼图)")
-    
-    # 🔥 核心：支持多选
-    uploaded_files = st.file_uploader("拖入多张产品图 (最多9张)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-    
-    # 🔥 预览拼图效果
-    stitched_preview = None
-    final_base64 = None
+    uploaded_files = st.file_uploader("拖入多张图片", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+    stitched_preview, final_base64 = None, None
     if uploaded_files:
-        with st.spinner("正在智能拼图..."):
-            stitched_preview, final_base64 = stitch_images_to_base64(uploaded_files)
-        if stitched_preview:
-            st.image(stitched_preview, caption=f"🧩 已将 {len(uploaded_files)} 张图拼合成一张参考图", use_column_width=True)
+        stitched_preview, final_base64 = stitch_images_to_base64(uploaded_files)
+        if stitched_preview: st.image(stitched_preview, caption="拼图预览", use_column_width=True)
 
-    # 参数
-    c1, c2 = st.columns(2)
-    with c1: batch_ratio = st.selectbox("比例", ["16:9", "9:16", "1:1"])
-    with c2: size_label = st.selectbox("画质", ["高清 (Large)", "标准 (Small)"])
-    batch_size = "large" if "高清" in size_label else "small"
+    start_btn = st.button(f"🚀 生成 {batch_dur}s 视频", type="primary", use_container_width=True, disabled=len(uploaded_files)==0)
 
-    start_btn = st.button("🚀 开拍 (音画合一)", type="primary", use_container_width=True, disabled=len(uploaded_files)==0)
-
-# --- 右侧：监视器 ---
 with col2:
-    st.subheader("🎬 导演监视器")
-    
+    st.subheader("🎬 进度监控")
     if start_btn:
         if not visual_script or not voice_text:
-            st.error("请完善脚本信息！")
+            st.error("脚本信息不全")
         else:
-            final_prompt = (
-                f"Target Language: {lang_name}.\n\n"
-                f"## PART 1: VISUAL DIRECTIVES\n"
-                f"Subject: {product_name}.\n"
-                f"Visual Style: {visual_script}.\n"
-                f"Reference Image: The provided image is a GRID showing multiple angles of the product. Please maintain consistency with these views.\n\n"
-                f"## PART 2: AUDIO CONTEXT\n"
-                f"Narrative Script: '{voice_text}'.\n"
-                f"Requirement: Characters must appear to be speaking {lang_name}."
-            )
+            final_prompt = f"Language: {lang_name}. Duration: {batch_dur}s. Visual: {visual_script}. Audio Context: {voice_text}."
             
-            with st.status("正在制片中...", expanded=True) as status:
-                status.write("🧩 拼图参考已上传...")
-                
-                # 1. 视频
-                status.write("🎥 Sora 正在渲染画面...")
-                res = submit_video_task(final_prompt, "sora-2", batch_ratio, 15, batch_size, final_base64)
+            with st.status(f"正在制作...", expanded=True) as status:
+                status.write("🎥 正在渲染画面...")
+                res = submit_video_task(final_prompt, "sora-2", batch_ratio, batch_dur, batch_size, final_base64)
                 task_id = res.get("data", {}).get("task_id") or res.get("task_id")
                 
                 if task_id:
@@ -263,40 +215,60 @@ with col2:
                         time.sleep(3)
                         check = check_result(task_id)
                         s = check.get("data", {}).get("status")
-                        bar.progress(min(i*2+10, 90))
+                        bar.progress(min(i*2+10, 95))
                         if s in ["SUCCESS", "COMPLETED", "succeeded"]:
                             d = check.get("data", {})
                             if d.get("results"): video_url = d["results"][0].get("url")
                             if not video_url: video_url = d.get("url")
                             break
                         elif s in ["FAILED", "failed"]:
-                            st.error("视频生成失败")
+                            st.error(f"Sora 生成失败: {check.get('msg')}")
                             st.stop()
                     
-                    # 2. 音频
                     if video_url:
-                        status.write("🗣️ 录制口播中...")
+                        # 🔥🔥🔥 改进点：拿到视频链接后，立即展示，防止后面合成报错导致啥都看不到
+                        status.write("✅ 画面生成成功！正在尝试配音合成...")
+                        st.info("👇 这是 Sora 生成的原始画面 (无声版)")
+                        st.video(video_url) # 先展示无声版保底
+                        
+                        # 尝试合成音频
                         os.makedirs("temp", exist_ok=True)
                         audio_path = f"temp/{task_id}.mp3"
                         video_path = f"temp/{task_id}.mp4"
                         final_path = f"temp/{task_id}_final.mp4"
                         
                         try:
-                            asyncio.run(generate_tts_audio(voice_text, voice_code, audio_path))
-                            with open(video_path, 'wb') as f:
-                                f.write(requests.get(video_url).content)
+                            # 下载视频
+                            v_data = requests.get(video_url).content
+                            with open(video_path, 'wb') as f: f.write(v_data)
                             
-                            status.write("🎞️ 剪辑合成中...")
+                            # 生成音频
+                            asyncio.run(generate_tts_audio(voice_text, voice_code, audio_path))
+                            
+                            # 合成
                             if merge_video_audio(video_path, audio_path, final_path):
-                                status.update(label="✅ 出片成功！", state="complete")
-                                st.success("🎉 您的产品大片已完成！")
-                                st.video(final_path)
+                                status.update(label="🎉 完美出片！", state="complete")
+                                st.success("✅ 有声合成版已就绪：")
+                                st.video(final_path) # 展示有声版
+                                
                                 with open(final_path, "rb") as f:
-                                    st.download_button("⬇️ 下载原片", f, file_name=f"Product_Ad_{task_id}.mp4")
+                                    st.download_button("⬇️ 下载有声视频", f, file_name=f"Final_{task_id}.mp4")
                             else:
-                                st.error("合成失败")
+                                status.update(label="⚠️ 合成失败 (显示原片)", state="error")
+                                st.warning("音频合成失败 (可能缺少 ffmpeg)，请直接下载上方的【无声原片】。")
+                                
                         except Exception as e:
-                            st.error(f"处理错误: {e}")
+                            status.update(label="⚠️ 处理出错", state="error")
+                            st.error(f"合成过程报错: {e}")
+                        
+                        # 无论如何都保存记录
+                        save_to_history({
+                            "task_id": task_id, "product": product_name, 
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "video_url": video_url, "script": voice_text
+                        })
+                    else:
+                        st.error("未能获取视频 URL")
                 else:
                     st.error(f"提交失败: {res}")
 
@@ -304,10 +276,7 @@ with col2:
         rec = st.session_state['current_record']
         st.info(f"回看：{rec.get('product')}")
         st.video(rec.get('video_url'))
+        st.caption(f"脚本：{rec.get('script')}")
 
     else:
-        st.markdown("""
-        <div style='background:#f0f2f6; padding:20px; border-radius:10px; color:gray; text-align:center'>
-            👋 请拖入产品多角度图片，开始生成
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("<div style='text-align:center; color:gray; padding:20px;'>👋 准备就绪</div>", unsafe_allow_html=True)
