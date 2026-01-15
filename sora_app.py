@@ -12,11 +12,9 @@ from datetime import datetime
 import edge_tts
 from moviepy.editor import VideoFileClip, AudioFileClip
 
-# ================= ⚠️ 配置区域 =================
-try:
-    API_KEY = st.secrets["API_KEY"]
-except:
-    API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" 
+# ================= 配置区域 =================
+# API_KEY = "sk-xxx"  <-- 这一行删掉或注释掉
+API_KEY = st.secrets["API_KEY"]  # <-- 改成这一行！从后台读取密码
 HOST = "https://grsai.dakka.com.cn" 
 
 LLM_API_KEY = "f87cd651378147b58a12828ad95465ee.9yUBYWw6o3DIGWKW" 
@@ -280,4 +278,5 @@ with col2:
 
     else:
         st.markdown("<div style='text-align:center; color:gray; padding:20px;'>👋 准备就绪</div>", unsafe_allow_html=True)
+
 
