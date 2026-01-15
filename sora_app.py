@@ -16,22 +16,22 @@ import urllib3
 # 禁用 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ================= ⚠️ 配置区域 =================
+# ================= ⚠️ 核心配置区 =================
 try:
     API_KEY = st.secrets["API_KEY"]
 except:
-    # ⚠️ 请确保这里填入的是你真实的 sk-xxx Key
+    # ⚠️ 此处填入您真实的 sk-xxx Key
     API_KEY = "sk-57e392622e3f45c0af35bde21611b0f8" 
 
 HOST = "https://grsai.dakka.com.cn" 
 
-# 智谱 AI 配置
+# 智谱 AI 配置 (已内置您的可用Key)
 LLM_API_KEY = "f87cd651378147b58a12828ad95465ee.9yUBYWw6o3DIGWKW" 
 LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"     
 LLM_MODEL = "glm-4-flash"                                 
 # ===============================================
 
-st.set_page_config(page_title="Sora 视频工坊 v9.9", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="Sora 视频工坊 v10.0", layout="wide", page_icon="🎬")
 
 # --- 🛠️ 辅助功能函数 ---
 
@@ -62,7 +62,7 @@ def get_headers():
     return {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json"
     }
 
@@ -83,22 +83,23 @@ def submit_video_task(prompt, model, aspect_ratio, duration, size, img_data=None
             if line:
                 decoded_line = line.decode('utf-8')
                 st.session_state['last_raw_response'] += decoded_line + "\n"
-                # 剥离 "data: " 前缀提取 JSON
-                clean_json = decoded_line.replace("data: ", "").strip()
-                try:
-                    data = json.loads(clean_json)
-                    # 优先获取顶层 id，其次获取 data 内部的 id
-                    tid = data.get("id") or (data.get("data", {}).get("id") if isinstance(data.get("data"), dict) else None)
-                    if tid: return data
-                except: continue
-        return {"error": "流式解析失败", "data": st.session_state['last_raw_response']}
+                # 增强型流式解析逻辑
+                if decoded_line.startswith("data: "):
+                    clean_json = decoded_line[6:].strip() # 剥离 "data: "
+                    try:
+                        data = json.loads(clean_json)
+                        # 只要有 id 就算提交成功
+                        tid = data.get("id") or (data.get("data", {}).get("id") if isinstance(data.get("data"), dict) else None)
+                        if tid: return data
+                    except: continue
+        return {"error": "解析失败", "data": st.session_state['last_raw_response']}
     except Exception as e:
         return {"error": str(e), "data": None}
 
 def check_result(task_id):
     url = f"{HOST}/v1/draw/result"
     try:
-        # 结果查询必须使用 id 参数
+        # 获取结果必须使用 id 参数
         res = requests.post(url, headers=get_headers(), json={"id": task_id}, timeout=30, verify=False)
         return res.json()
     except Exception as e:
@@ -138,41 +139,42 @@ def save_to_history(record):
 
 # --- 🖥️ UI 界面布局 ---
 
-st.markdown("## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v9.9 (全功能修复版)</span>", unsafe_allow_html=True)
-# 🔥 定义 col1, col2 确保变量在全局作用域内可用
-col1, col2 = st.columns([1, 1.5])
+st.markdown("## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v10.0 (终极稳定版)</span>", unsafe_allow_html=True)
+
+# 定义布局变量
+main_col1, main_col2 = st.columns([1, 1.5])
 
 VOICE_MAP = {"Thai (泰语)": "th-TH-NiwatNeural", "English (英语)": "en-US-ChristopherNeural", "Malay (马来语)": "ms-MY-OsmanNeural"}
 
-with col1:
+with main_col1:
     st.subheader("1. 创作设置")
-    lang_opt = st.selectbox("语言", list(VOICE_MAP.keys()))
-    product = st.text_input("产品名")
+    lang_opt = st.selectbox("目标语言", list(VOICE_MAP.keys()))
+    product = st.text_input("产品名称")
     batch_dur = int(st.selectbox("时长", ["5s", "10s", "15s"]).replace("s",""))
     size_label = st.selectbox("画质", ["高清 (Large)", "标准 (Small)"])
-    v_script = st.text_area("视觉描述脚本", height=70)
+    v_script = st.text_area("视觉指令脚本", height=70)
     
     if st.button("✨ 自动生成脚本"):
-        if not product: st.error("请先填产品名")
+        if not product: st.error("请先输入产品名")
         else:
             s, e = generate_script(product, lang_opt, batch_dur)
             if s: st.session_state['active_script'] = s
     a_script = st.text_area("口播文案", value=st.session_state.get('active_script', ""), height=90)
     
-    files = st.file_uploader("素材图片 (多选拼图)", accept_multiple_files=True)
+    files = st.file_uploader("多角度参考图 (支持多选拼图)", accept_multiple_files=True)
     b64_data = encode_image_to_base64(files)
     if b64_data and files: st.image(files[0], width=100, caption="参考图准备完毕")
     
-    start_btn = st.button("🚀 启动生成任务", type="primary", use_container_width=True)
+    start_btn = st.button("🚀 启动视频生成", type="primary", use_container_width=True)
 
-# 🔥 严格对应变量名 col2
-with col2:
+# 严格对应 main_col2 变量
+with main_col2:
     st.subheader("🎬 实时制片监控")
     if start_btn:
         if not v_script or not a_script:
             st.error("视觉脚本或口播文案不能为空！")
         else:
-            with st.status("制片流程启动中...", expanded=True) as status:
+            with st.status("正在处理任务...", expanded=True) as status:
                 status.write("📡 提交任务并解析流数据...")
                 full_p = f"Language: {lang_opt}. Visual: {v_script}. Narrative: {a_script}"
                 res = submit_video_task(full_p, "sora-2", "16:9", batch_dur, "large" if "高清" in size_label else "small", b64_data)
@@ -180,20 +182,20 @@ with col2:
                 if "error" in res:
                     status.update(label="❌ 提交失败", state="error")
                     st.error(f"解析错误: {res['error']}")
-                    with st.expander("原始流数据排查"):
+                    with st.expander("查看原始流数据 (用于排查)"):
                         st.code(st.session_state.get('last_raw_response', '无内容'))
                     st.stop()
                 
-                # 提取任务 ID
+                # 精准提取任务 ID
                 tid = res.get("id") or (res.get("data", {}).get("id") if isinstance(res.get("data"), dict) else None)
                 
                 if tid:
-                    status.write(f"✅ 任务接收 ID: {tid}")
+                    status.write(f"✅ 任务成功 ID: {tid}")
                     v_url = None
                     bar = st.progress(0)
                     for i in range(120): # 最多等待8分钟
                         time.sleep(4)
-                        r = check_result(tid)
+                        r = check_result(tid) # 必须使用 id 参数查询
                         check_data = r.get("data", {})
                         s = check_data.get("status")
                         
@@ -203,13 +205,13 @@ with col2:
                             v_url = results[0].get("url") if results else check_data.get("url")
                             break
                         if s in ["FAILED", "failed"]: 
-                            st.error("渲染失败"); break
+                            st.error("AI 渲染失败"); break
                     
                     if v_url:
                         status.update(label="✨ 画面渲染完成", state="complete")
                         st.video(v_url)
                         
-                        # 合成逻辑
+                        # 合成逻辑 (依赖 packages.txt 中的 ffmpeg)
                         os.makedirs("temp", exist_ok=True)
                         v_p, a_p, f_p = f"temp/{tid}.mp4", f"temp/{tid}.mp3", f"temp/{tid}_f.mp4"
                         try:
@@ -218,12 +220,12 @@ with col2:
                             if merge_av(v_p, a_p, f_p):
                                 st.success("✅ 音画合成成功！")
                                 st.video(f_p)
-                                with open(f_p, "rb") as f: st.download_button("⬇️ 下载成品", f, file_name=f"AD_{tid}.mp4")
+                                with open(f_p, "rb") as f: st.download_button("⬇️ 下载成品", f, file_name=f"FIN_{tid}.mp4")
                             else:
-                                st.warning("合成异常，请下载无声版")
+                                st.warning("合成环境异常，请直接下载上方的无声视频")
                         except Exception as e:
-                            st.error(f"处理错误: {e}")
+                            st.error(f"后期处理出错: {e}")
                         
                         save_to_history({"task_id": tid, "product": product, "time": datetime.now().strftime("%H:%M"), "video_url": v_url})
                 else:
-                    st.error("未在响应中解析到任务 ID")
+                    st.error("无法解析任务 ID")
