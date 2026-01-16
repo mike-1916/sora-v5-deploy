@@ -10,15 +10,17 @@ import math
 import re
 import hashlib
 from PIL import Image
-from datetime import datetime
+from datetime import datetime, timedelta
 import edge_tts
 from moviepy.editor import VideoFileClip, AudioFileClip
 import urllib3
+# 🔥 新增库：用于管理 Cookie 实现自动登录
+import extra_streamlit_components as stx
 
 # 禁用 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ================= 🔒 核心配置与密钥读取 =================
+# ================= 🔒 核心配置 =================
 HOST = "https://grsai.dakka.com.cn" 
 LLM_BASE_URL = "https://grsaiapi.com/v1"  
 LLM_MODEL = "gemini-2.5-flash" 
@@ -26,18 +28,24 @@ LLM_MODEL = "gemini-2.5-flash"
 try:
     API_KEY = st.secrets["SORA_API_KEY"]
     LLM_API_KEY = st.secrets["GEMINI_API_KEY"]
-    # 读取管理员配置，若未配置则使用默认值（强烈建议配置）
     ADMIN_USER = st.secrets.get("ADMIN_USERNAME", "admin")
     ADMIN_PASS = st.secrets.get("ADMIN_PASSWORD", "admin123")
 except Exception as e:
     st.error("❌ 启动配置错误")
-    st.warning("请检查 secrets.toml 是否包含 SORA_API_KEY, GEMINI_API_KEY, ADMIN_USERNAME, ADMIN_PASSWORD")
+    st.warning("请检查 secrets.toml 配置")
     st.stop()
-# ==========================================================
+# ===============================================
 
-st.set_page_config(page_title="Sora 视频工坊 v12.0", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="Sora 视频工坊 v13.0", layout="wide", page_icon="🎬")
 
-# --- 🔐 用户认证系统 (新增模块) ---
+# --- 🍪 Cookie 管理器初始化 ---
+# 注意：这行代码必须放在正文逻辑之前
+def get_manager():
+    return stx.CookieManager(key="sora_cookie_manager")
+
+cookie_manager = get_manager()
+
+# --- 🔐 用户认证系统 ---
 
 USER_DB_FILE = "users.json"
 
@@ -45,24 +53,24 @@ def make_hashes(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 def check_hashes(password, hashed_text):
-    if make_hashes(password) == hashed_text:
-        return True
-    return False
+    return make_hashes(password) == hashed_text
+
+# 生成 Cookie 签名 (防止用户伪造 Cookie)
+def generate_token_signature(username):
+    # 使用 API_KEY 作为盐值进行加密，确保安全性
+    raw = f"{username}:{API_KEY}"
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 def load_users():
-    if not os.path.exists(USER_DB_FILE):
-        return {}
+    if not os.path.exists(USER_DB_FILE): return {}
     try:
-        with open(USER_DB_FILE, "r") as f:
-            return json.load(f)
+        with open(USER_DB_FILE, "r") as f: return json.load(f)
     except: return {}
 
 def save_users(users):
-    with open(USER_DB_FILE, "w") as f:
-        json.dump(users, f, indent=4)
+    with open(USER_DB_FILE, "w") as f: json.dump(users, f, indent=4)
 
 def init_admin():
-    """初始化管理员账户（如果不存在）"""
     users = load_users()
     if ADMIN_USER not in users:
         users[ADMIN_USER] = {
@@ -73,7 +81,7 @@ def init_admin():
         }
         save_users(users)
 
-# 初始化
+# 初始化 Session
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["username"] = None
@@ -81,8 +89,29 @@ if "logged_in" not in st.session_state:
 
 init_admin()
 
-# --- 🔐 登录/注册 界面逻辑 ---
+# --- 🍪 自动登录检查逻辑 ---
+# 每次刷新页面都会运行这段逻辑
+if not st.session_state["logged_in"]:
+    # 尝试从浏览器读取 Cookie
+    auth_cookie = cookie_manager.get(cookie="sora_auth_token")
+    
+    if auth_cookie:
+        # Cookie 格式: "username|signature"
+        try:
+            c_user, c_sign = auth_cookie.split("|")
+            # 校验签名是否合法
+            if c_sign == generate_token_signature(c_user):
+                users = load_users()
+                if c_user in users and users[c_user].get("approved", False):
+                    st.session_state["logged_in"] = True
+                    st.session_state["username"] = c_user
+                    st.session_state["role"] = users[c_user].get("role", "user")
+                    # 悄悄刷新页面，用户无感知进入
+                    st.rerun()
+        except:
+            pass # Cookie 格式不对，忽略
 
+# --- 🔐 登录页面逻辑 ---
 def login_page():
     st.markdown("## 🔐 Sora 视频工坊 - 身份验证")
     
@@ -91,6 +120,7 @@ def login_page():
     with tab1:
         username = st.text_input("用户名", key="login_user")
         password = st.text_input("密码", type="password", key="login_pass")
+        remember_me = st.checkbox("保持长期登录 (7天)", value=True)
         
         if st.button("登录", type="primary"):
             users = load_users()
@@ -101,7 +131,17 @@ def login_page():
                         st.session_state["logged_in"] = True
                         st.session_state["username"] = username
                         st.session_state["role"] = user_data.get("role", "user")
-                        st.success("登录成功！正在跳转...")
+                        
+                        # 🔥 核心：写入 Cookie 🔥
+                        if remember_me:
+                            # 生成 token: username|signature
+                            token = f"{username}|{generate_token_signature(username)}"
+                            # 设置过期时间为 7 天
+                            expires_at = datetime.now() + timedelta(days=7)
+                            cookie_manager.set("sora_auth_token", token, expires_at=expires_at)
+                        
+                        st.success("登录成功！")
+                        time.sleep(0.5)
                         st.rerun()
                     else:
                         st.warning("⚠️ 您的账号正在等待管理员审核，请稍后再试。")
@@ -126,15 +166,15 @@ def login_page():
             else:
                 users[new_user] = {
                     "password": make_hashes(new_pass),
-                    "approved": False, # 默认为未批准
+                    "approved": False,
                     "role": "user",
                     "created_at": str(datetime.now())
                 }
                 save_users(users)
                 st.success("✅ 注册申请已提交！请联系管理员进行审核批准。")
 
-# --- 🛠️ 业务功能函数 (原有的功能) ---
-
+# --- 🛠️ 业务功能函数 ---
+# (这部分保持不变)
 def process_uploaded_images(uploaded_files):
     if not uploaded_files: return None, None
     try:
@@ -240,36 +280,35 @@ if not st.session_state["logged_in"]:
 else:
     # --- 登录后的主界面 ---
     
-    # 侧边栏：用户信息与登出
     with st.sidebar:
         st.write(f"👤 当前用户: **{st.session_state['username']}**")
+        
+        # 🔥 退出登录逻辑更新：删除 Cookie 🔥
         if st.button("🚪 退出登录"):
+            cookie_manager.delete("sora_auth_token")
             st.session_state["logged_in"] = False
             st.rerun()
         
         st.markdown("---")
         
-        # 🔥 管理员专属面板 🔥
         if st.session_state["role"] == "admin":
             st.subheader("🛡️ 管理员控制台")
             users = load_users()
             pending_users = [u for u, d in users.items() if not d.get("approved")]
-            
             if pending_users:
-                st.warning(f"有 {len(pending_users)} 个待审核用户")
+                st.warning(f"待审核: {len(pending_users)}")
                 for pu in pending_users:
                     col_u, col_btn = st.columns([2, 1])
                     col_u.write(pu)
-                    if col_btn.button("✅ 通过", key=f"app_{pu}"):
+                    if col_btn.button("✅", key=f"app_{pu}"):
                         users[pu]["approved"] = True
                         save_users(users)
-                        st.success(f"已批准 {pu}")
+                        st.success(f"已批准")
                         st.rerun()
             else:
-                st.info("暂无待审核用户")
+                st.info("暂无待审核")
             st.markdown("---")
 
-        # 历史记录部分
         st.header("📂 历史作品库")
         search_term = st.text_input("🔍 搜索产品名", placeholder="输入关键词...")
         if os.path.exists("history.json"):
@@ -278,8 +317,6 @@ else:
                     history_data = json.load(f)
                     if not isinstance(history_data, list): history_data = []
                     for item in reversed(history_data):
-                        # 简单过滤：只看自己的记录，或者管理员看所有
-                        # 这里为了方便，暂不限制历史记录查看权限，或者您可以加 if item['user'] == ...
                         product_name = item.get('product', '无标题')
                         if search_term and search_term.lower() not in product_name.lower(): continue
                         label = f"{item.get('time', '未知')} | {product_name}"
@@ -290,8 +327,8 @@ else:
                                 st.write(f"[🔗 下载]({item.get('video_url')})")
                 except: pass
 
-    # --- 主功能区 (V11.6 的完整逻辑) ---
-    st.markdown(f"## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v12.0 (权限管理版)</span>", unsafe_allow_html=True)
+    # --- 业务界面 (保持 v12.0 功能) ---
+    st.markdown(f"## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v13.0 (持久化登录版)</span>", unsafe_allow_html=True)
 
     main_col1, main_col2 = st.columns([1, 1.5])
     
@@ -342,12 +379,10 @@ else:
                     full_p = f"Language: {lang_opt}. Visual: {v_script}. Narrative: {a_script}"
                     res = submit_video_task(full_p, "sora-2", "16:9", batch_dur, "large" if "高清" in size_label else "small", b64_data)
                     tid = res.get("id")
-                    
                     if not tid:
                         status.update(label="❌ 提交失败", state="error")
                         st.error(f"错误: {res.get('error')}")
                         st.stop()
-                    
                     status.write(f"✅ 任务ID: {tid}")
                     status.write("⏳ 生成中...")
                     
@@ -358,7 +393,6 @@ else:
                         r = check_result(tid)
                         data_layer = r.get("data", r) if isinstance(r.get("data"), dict) else r
                         current_status = str(data_layer.get("status")).lower()
-                        
                         if current_status in ["failed", "error"]:
                             status.update(label="❌ 失败", state="error")
                             st.error(f"失败原因: {data_layer.get('failure_reason')}")
@@ -386,10 +420,8 @@ else:
                                 final_v = f_p
                             else: st.warning("音频合成失败，使用原片")
                         except: pass
-                        
                         status.update(label="✨ 完成", state="complete")
                         st.video(final_v)
                         with open(final_v if is_merged else v_p, "rb") as f:
                             st.download_button("⬇️ 下载视频", f, file_name=f"FINAL_{tid}.mp4")
-                        
                         save_to_history({"task_id": tid, "product": product, "time": datetime.now().strftime("%H:%M"), "video_url": v_url, "user": st.session_state["username"]})
