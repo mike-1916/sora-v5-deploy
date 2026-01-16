@@ -11,8 +11,10 @@ import re
 import hashlib
 from PIL import Image
 from datetime import datetime, timedelta
+import edge_tts
+from moviepy.editor import VideoFileClip, AudioFileClip
 import urllib3
-# 必须安装: pip install extra-streamlit-components
+# 🔥 新增库：用于管理 Cookie 实现自动登录
 import extra_streamlit_components as stx
 
 # 禁用 SSL 警告
@@ -34,16 +36,17 @@ except Exception as e:
     st.stop()
 # ===============================================
 
-st.set_page_config(page_title="Sora 视频工坊 v13.2", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="Sora 视频工坊 v13.0", layout="wide", page_icon="🎬")
 
-# --- 🍪 Cookie 管理器 (单例模式) ---
-@st.cache_resource(experimental_allow_widgets=True)
+# --- 🍪 Cookie 管理器初始化 ---
+# 注意：这行代码必须放在正文逻辑之前
 def get_manager():
     return stx.CookieManager(key="sora_cookie_manager")
 
 cookie_manager = get_manager()
 
 # --- 🔐 用户认证系统 ---
+
 USER_DB_FILE = "users.json"
 
 def make_hashes(password):
@@ -52,7 +55,9 @@ def make_hashes(password):
 def check_hashes(password, hashed_text):
     return make_hashes(password) == hashed_text
 
+# 生成 Cookie 签名 (防止用户伪造 Cookie)
 def generate_token_signature(username):
+    # 使用 API_KEY 作为盐值进行加密，确保安全性
     raw = f"{username}:{API_KEY}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -76,6 +81,7 @@ def init_admin():
         }
         save_users(users)
 
+# 初始化 Session
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["username"] = None
@@ -83,31 +89,31 @@ if "logged_in" not in st.session_state:
 
 init_admin()
 
-# --- 🍪 自动登录检查 (增强版) ---
+# --- 🍪 自动登录检查逻辑 ---
+# 每次刷新页面都会运行这段逻辑
 if not st.session_state["logged_in"]:
-    # 尝试读取 Cookie
-    # 注意：在 Streamlit 中，组件加载需要时间，首次刷新可能读到 None
+    # 尝试从浏览器读取 Cookie
     auth_cookie = cookie_manager.get(cookie="sora_auth_token")
     
     if auth_cookie:
+        # Cookie 格式: "username|signature"
         try:
             c_user, c_sign = auth_cookie.split("|")
+            # 校验签名是否合法
             if c_sign == generate_token_signature(c_user):
                 users = load_users()
                 if c_user in users and users[c_user].get("approved", False):
                     st.session_state["logged_in"] = True
                     st.session_state["username"] = c_user
                     st.session_state["role"] = users[c_user].get("role", "user")
-                    st.rerun() # 立即刷新进入
-        except: pass
+                    # 悄悄刷新页面，用户无感知进入
+                    st.rerun()
+        except:
+            pass # Cookie 格式不对，忽略
 
-# --- 🔐 登录页面 ---
+# --- 🔐 登录页面逻辑 ---
 def login_page():
     st.markdown("## 🔐 Sora 视频工坊 - 身份验证")
-    
-    # 显示一个小提示，如果是刚刷新还在加载Cookie
-    if not st.session_state["logged_in"]:
-        time.sleep(0.3) # 给 Cookie 管理器一点时间挂载
     
     tab1, tab2 = st.tabs(["登录", "注册新账号"])
     
@@ -126,17 +132,19 @@ def login_page():
                         st.session_state["username"] = username
                         st.session_state["role"] = user_data.get("role", "user")
                         
+                        # 🔥 核心：写入 Cookie 🔥
                         if remember_me:
+                            # 生成 token: username|signature
                             token = f"{username}|{generate_token_signature(username)}"
-                            # 🔥 核心修复：使用 UTC 时间，避免时区差异导致 Cookie 无效
-                            expires_at = datetime.utcnow() + timedelta(days=7)
+                            # 设置过期时间为 7 天
+                            expires_at = datetime.now() + timedelta(days=7)
                             cookie_manager.set("sora_auth_token", token, expires_at=expires_at)
                         
                         st.success("登录成功！")
                         time.sleep(0.5)
                         st.rerun()
                     else:
-                        st.warning("⚠️ 您的账号正在等待管理员审核。")
+                        st.warning("⚠️ 您的账号正在等待管理员审核，请稍后再试。")
                 else:
                     st.error("❌ 密码错误")
             else:
@@ -163,9 +171,10 @@ def login_page():
                     "created_at": str(datetime.now())
                 }
                 save_users(users)
-                st.success("✅ 注册申请已提交！")
+                st.success("✅ 注册申请已提交！请联系管理员进行审核批准。")
 
-# --- 🛠️ 业务功能函数 (内置懒加载加速) ---
+# --- 🛠️ 业务功能函数 ---
+# (这部分保持不变)
 def process_uploaded_images(uploaded_files):
     if not uploaded_files: return None, None
     try:
@@ -175,6 +184,7 @@ def process_uploaded_images(uploaded_files):
             images[0].save(buf, format="PNG")
             b64_str = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"
             return b64_str, images[0]
+        
         count = len(images)
         cols = math.ceil(math.sqrt(count))
         rows = math.ceil(count / cols)
@@ -244,12 +254,10 @@ def generate_ai_scripts(prod_name, lang, dur, image_base64=None):
     except Exception as e: return "", str(e)
 
 async def generate_tts(text, voice, file):
-    import edge_tts
     await edge_tts.Communicate(text, voice).save(file)
 
 def merge_av(v, a, out):
     try:
-        from moviepy.editor import VideoFileClip, AudioFileClip
         vc = VideoFileClip(v); ac = AudioFileClip(a)
         fa = ac.subclip(0, vc.duration) if ac.duration > vc.duration else ac
         vc.set_audio(fa).write_videofile(out, codec='libx264', audio_codec='aac', logger=None)
@@ -265,21 +273,26 @@ def save_to_history(record):
     history.append(record)
     with open("history.json", "w") as f: json.dump(history, f, indent=2)
 
-# --- 🖥️ 主程序 ---
+# --- 🖥️ 主程序逻辑 ---
+
 if not st.session_state["logged_in"]:
     login_page()
 else:
+    # --- 登录后的主界面 ---
+    
     with st.sidebar:
-        st.write(f"👤 用户: **{st.session_state['username']}**")
-        if st.button("🚪 退出"):
-            # 删除 Cookie 时也要指定 key，否则可能删不掉
+        st.write(f"👤 当前用户: **{st.session_state['username']}**")
+        
+        # 🔥 退出登录逻辑更新：删除 Cookie 🔥
+        if st.button("🚪 退出登录"):
             cookie_manager.delete("sora_auth_token")
             st.session_state["logged_in"] = False
             st.rerun()
         
         st.markdown("---")
+        
         if st.session_state["role"] == "admin":
-            st.subheader("🛡️ 管理")
+            st.subheader("🛡️ 管理员控制台")
             users = load_users()
             pending_users = [u for u, d in users.items() if not d.get("approved")]
             if pending_users:
@@ -290,13 +303,14 @@ else:
                     if col_btn.button("✅", key=f"app_{pu}"):
                         users[pu]["approved"] = True
                         save_users(users)
-                        st.success("已批准")
+                        st.success(f"已批准")
                         st.rerun()
-            else: st.info("无待审核")
+            else:
+                st.info("暂无待审核")
             st.markdown("---")
 
-        st.header("📂 历史")
-        search_term = st.text_input("🔍 搜索", placeholder="关键词...")
+        st.header("📂 历史作品库")
+        search_term = st.text_input("🔍 搜索产品名", placeholder="输入关键词...")
         if os.path.exists("history.json"):
             with open("history.json", "r") as f:
                 try:
@@ -313,7 +327,9 @@ else:
                                 st.write(f"[🔗 下载]({item.get('video_url')})")
                 except: pass
 
-    st.markdown(f"## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v13.2 (Cookie修复版)</span>", unsafe_allow_html=True)
+    # --- 业务界面 (保持 v12.0 功能) ---
+    st.markdown(f"## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v13.0 (持久化登录版)</span>", unsafe_allow_html=True)
+
     main_col1, main_col2 = st.columns([1, 1.5])
     
     VOICE_MAP = {
@@ -379,7 +395,7 @@ else:
                         current_status = str(data_layer.get("status")).lower()
                         if current_status in ["failed", "error"]:
                             status.update(label="❌ 失败", state="error")
-                            st.error(f"失败: {data_layer.get('failure_reason')}")
+                            st.error(f"失败原因: {data_layer.get('failure_reason')}")
                             break
                         elif current_status in ["success", "succeeded", "completed"]:
                             results = data_layer.get("results", [])
@@ -391,7 +407,7 @@ else:
                             continue
                     
                     if v_url:
-                        status.write("🔨 合成音画 (首次运行较慢请耐心等待)...")
+                        status.write("🔨 合成音画...")
                         os.makedirs("temp", exist_ok=True)
                         v_p, a_p, f_p = f"temp/{tid}.mp4", f"temp/{tid}.mp3", f"temp/{tid}_f.mp4"
                         final_v = v_url
