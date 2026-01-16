@@ -34,15 +34,10 @@ except Exception as e:
     st.stop()
 # ===============================================
 
-st.set_page_config(page_title="Sora 视频工坊 v13.3", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="Sora 视频工坊 v14.0", layout="wide", page_icon="🎬")
 
-# --- 🍪 Cookie 管理器 (单例模式) ---
-# 🔥 核心修复：删除了 (experimental_allow_widgets=True) 参数
-@st.cache_resource
-def get_manager():
-    return stx.CookieManager(key="sora_cookie_manager")
-
-cookie_manager = get_manager()
+# --- 🍪 Cookie 管理器 ---
+cookie_manager = stx.CookieManager(key="sora_cookie_manager")
 
 # --- 🔐 用户认证系统 ---
 USER_DB_FILE = "users.json"
@@ -68,6 +63,7 @@ def save_users(users):
 
 def init_admin():
     users = load_users()
+    # 确保 secrets 里的管理员账号始终存在且通过验证
     if ADMIN_USER not in users:
         users[ADMIN_USER] = {
             "password": make_hashes(ADMIN_PASS),
@@ -76,6 +72,11 @@ def init_admin():
             "created_at": str(datetime.now())
         }
         save_users(users)
+    else:
+        # 如果密码在 secrets 改了，更新本地数据库
+        if users[ADMIN_USER]["password"] != make_hashes(ADMIN_PASS):
+             users[ADMIN_USER]["password"] = make_hashes(ADMIN_PASS)
+             save_users(users)
 
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
@@ -86,11 +87,8 @@ init_admin()
 
 # --- 🍪 自动登录检查 ---
 if not st.session_state["logged_in"]:
-    # 尝试读取 Cookie
-    # 给一点缓冲时间让组件加载
     time.sleep(0.1)
     auth_cookie = cookie_manager.get(cookie="sora_auth_token")
-    
     if auth_cookie:
         try:
             c_user, c_sign = auth_cookie.split("|")
@@ -106,7 +104,6 @@ if not st.session_state["logged_in"]:
 # --- 🔐 登录页面 ---
 def login_page():
     st.markdown("## 🔐 Sora 视频工坊 - 身份验证")
-    
     tab1, tab2 = st.tabs(["登录", "注册新账号"])
     
     with tab1:
@@ -123,13 +120,10 @@ def login_page():
                         st.session_state["logged_in"] = True
                         st.session_state["username"] = username
                         st.session_state["role"] = user_data.get("role", "user")
-                        
                         if remember_me:
                             token = f"{username}|{generate_token_signature(username)}"
-                            # 使用 UTC 时间
                             expires_at = datetime.utcnow() + timedelta(days=7)
                             cookie_manager.set("sora_auth_token", token, expires_at=expires_at)
-                        
                         st.success("登录成功！")
                         time.sleep(0.5)
                         st.rerun()
@@ -163,7 +157,7 @@ def login_page():
                 save_users(users)
                 st.success("✅ 注册申请已提交！")
 
-# --- 🛠️ 业务功能函数 (内置懒加载加速) ---
+# --- 🛠️ 业务功能函数 ---
 def process_uploaded_images(uploaded_files):
     if not uploaded_files: return None, None
     try:
@@ -270,27 +264,71 @@ else:
     with st.sidebar:
         st.write(f"👤 用户: **{st.session_state['username']}**")
         if st.button("🚪 退出"):
-            # 删除 Cookie
             cookie_manager.delete("sora_auth_token")
             st.session_state["logged_in"] = False
             st.rerun()
         
         st.markdown("---")
+        
+        # 🔥🔥🔥 v14.0 新增：增强版管理员控制台 🔥🔥🔥
         if st.session_state["role"] == "admin":
-            st.subheader("🛡️ 管理")
+            st.subheader("🛡️ 管理员控制台")
             users = load_users()
-            pending_users = [u for u, d in users.items() if not d.get("approved")]
-            if pending_users:
-                st.warning(f"待审核: {len(pending_users)}")
-                for pu in pending_users:
-                    col_u, col_btn = st.columns([2, 1])
-                    col_u.write(pu)
-                    if col_btn.button("✅", key=f"app_{pu}"):
-                        users[pu]["approved"] = True
+            
+            # --- 功能 1: 审核待批准用户 ---
+            with st.expander("📬 待审核申请", expanded=True):
+                pending_users = [u for u, d in users.items() if not d.get("approved")]
+                if pending_users:
+                    for pu in pending_users:
+                        col1, col2 = st.columns([3, 1])
+                        col1.write(f"👤 {pu}")
+                        if col2.button("✅", key=f"app_{pu}"):
+                            users[pu]["approved"] = True
+                            save_users(users)
+                            st.success(f"已批准 {pu}")
+                            time.sleep(0.5)
+                            st.rerun()
+                else:
+                    st.info("暂无待审核申请")
+
+            # --- 功能 2: 手动添加用户 ---
+            with st.expander("➕ 添加新用户"):
+                with st.form("add_user_form", clear_on_submit=True):
+                    new_u_name = st.text_input("新用户名")
+                    new_u_pass = st.text_input("密码", type="password")
+                    if st.form_submit_button("创建账号"):
+                        if new_u_name and new_u_pass:
+                            if new_u_name in users:
+                                st.error("用户已存在")
+                            else:
+                                users[new_u_name] = {
+                                    "password": make_hashes(new_u_pass),
+                                    "approved": True, # 管理员添加的直接通过
+                                    "role": "user",
+                                    "created_at": str(datetime.now())
+                                }
+                                save_users(users)
+                                st.success(f"已创建用户: {new_u_name}")
+                                time.sleep(0.5)
+                                st.rerun()
+                        else:
+                            st.error("请填写完整")
+
+            # --- 功能 3: 删除用户 ---
+            with st.expander("🗑️ 删除用户"):
+                # 排除管理员自己，防止误删
+                user_list = [u for u in users.keys() if u != ADMIN_USER]
+                if user_list:
+                    selected_user = st.selectbox("选择要删除的用户", user_list)
+                    if st.button(f"确认删除 {selected_user}", type="primary"):
+                        del users[selected_user]
                         save_users(users)
-                        st.success("已批准")
+                        st.warning(f"已删除用户: {selected_user}")
+                        time.sleep(0.5)
                         st.rerun()
-            else: st.info("无待审核")
+                else:
+                    st.info("没有可删除的其他用户")
+            
             st.markdown("---")
 
         st.header("📂 历史")
@@ -311,7 +349,7 @@ else:
                                 st.write(f"[🔗 下载]({item.get('video_url')})")
                 except: pass
 
-    st.markdown(f"## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v13.3 (修复报错版)</span>", unsafe_allow_html=True)
+    st.markdown(f"## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v14.0 (用户管理版)</span>", unsafe_allow_html=True)
     main_col1, main_col2 = st.columns([1, 1.5])
     
     VOICE_MAP = {
