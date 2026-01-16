@@ -25,10 +25,11 @@ except:
 
 HOST = "https://grsai.dakka.com.cn" 
 
-# 智谱 AI 配置 (已内置您的可用Key)
+# 智谱 AI 配置
+# ⚠️ 注意：为了安全，建议将 Key 放入 st.secrets 或环境变量中
 LLM_API_KEY = "f87cd651378147b58a12828ad95465ee.9yUBYWw6o3DIGWKW" 
 LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"     
-LLM_MODEL = "glm-4-flash"                                 
+LLM_MODEL = "glm-4-flash"                              
 # ===============================================
 
 st.set_page_config(page_title="Sora 视频工坊 v10.0", layout="wide", page_icon="🎬")
@@ -83,14 +84,17 @@ def submit_video_task(prompt, model, aspect_ratio, duration, size, img_data=None
             if line:
                 decoded_line = line.decode('utf-8')
                 st.session_state['last_raw_response'] += decoded_line + "\n"
+              
                 # 增强型流式解析逻辑
                 if decoded_line.startswith("data: "):
                     clean_json = decoded_line[6:].strip() # 剥离 "data: "
                     try:
                         data = json.loads(clean_json)
+       
                         # 只要有 id 就算提交成功
                         tid = data.get("id") or (data.get("data", {}).get("id") if isinstance(data.get("data"), dict) else None)
                         if tid: return data
+                   
                     except: continue
         return {"error": "解析失败", "data": st.session_state['last_raw_response']}
     except Exception as e:
@@ -139,7 +143,7 @@ def save_to_history(record):
 
 # --- 🖥️ UI 界面布局 ---
 
-st.markdown("## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v10.0 (终极稳定版)</span>", unsafe_allow_html=True)
+st.markdown("## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v10.1 (修复版)</span>", unsafe_allow_html=True)
 
 # 定义布局变量
 main_col1, main_col2 = st.columns([1, 1.5])
@@ -196,16 +200,30 @@ with main_col2:
                     for i in range(120): # 最多等待8分钟
                         time.sleep(4)
                         r = check_result(tid) # 必须使用 id 参数查询
-                        check_data = r.get("data", {})
+                        
+                        # ==================== 🔥 关键修复位置 ====================
+                        # 智能判断：如果r里有'data'且是字典，取r['data']；否则直接把r当作数据本体
+                        # 这样兼容了 {data: {status:...}} 和 {status:...} 两种情况
+                        if "data" in r and isinstance(r["data"], dict):
+                            check_data = r["data"]
+                        else:
+                            check_data = r
+                        # ========================================================
+                        
                         s = check_data.get("status")
                         
                         bar.progress(min(i*1, 95))
-                        if s in ["SUCCESS", "COMPLETED", "succeeded"]:
+                        
+                        # 兼容各种成功状态写法
+                        if s in ["SUCCESS", "COMPLETED", "succeeded", "success"]:
                             results = check_data.get("results", [])
                             v_url = results[0].get("url") if results else check_data.get("url")
                             break
-                        if s in ["FAILED", "failed"]: 
-                            st.error("AI 渲染失败"); break
+                        
+                        # 兼容各种失败状态写法
+                        if s in ["FAILED", "failed", "error"]: 
+                            st.error(f"AI 渲染失败: {check_data.get('failure_reason') or check_data.get('error')}")
+                            break
                     
                     if v_url:
                         status.update(label="✨ 画面渲染完成", state="complete")
