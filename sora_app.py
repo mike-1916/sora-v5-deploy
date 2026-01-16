@@ -31,58 +31,38 @@ except Exception as e:
     st.stop()
 # ====================================================
 
-st.set_page_config(page_title="Sora 视频工坊 v11.5", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="Sora 视频工坊 v11.6", layout="wide", page_icon="🎬")
 
-# --- 🛠️ 核心升级：图片拼合处理函数 ---
+# --- 🛠️ 拼图处理函数 ---
 
 def process_uploaded_images(uploaded_files):
-    """
-    输入：多个文件对象
-    输出：(Base64字符串, PIL图片对象)
-    功能：自动将多图拼合为一张大图
-    """
     if not uploaded_files: return None, None
     try:
         images = [Image.open(f) for f in uploaded_files]
-        
-        # 1. 单张图片直接处理
         if len(images) == 1:
             buf = io.BytesIO()
             images[0].save(buf, format="PNG")
             b64_str = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"
             return b64_str, images[0]
         
-        # 2. 多张图片：计算网格布局
         count = len(images)
-        cols = math.ceil(math.sqrt(count)) # 计算列数
-        rows = math.ceil(count / cols)     # 计算行数
-        
-        # 设定单元格大小 (例如 512x512)
+        cols = math.ceil(math.sqrt(count))
+        rows = math.ceil(count / cols)
         cell_size = 512
-        # 创建白色背景的大图
         merged_img = Image.new('RGB', (cols * cell_size, rows * cell_size), (255, 255, 255))
         
         for i, img in enumerate(images):
-            # 计算当前图片应该在第几行第几列
             r_idx = i // cols
             c_idx = i % cols
-            
-            # 缩放图片以适应单元格 (保持比例，留白填充)
             img.thumbnail((cell_size, cell_size))
-            
-            # 计算居中粘贴的坐标
             x = c_idx * cell_size + (cell_size - img.width) // 2
             y = r_idx * cell_size + (cell_size - img.height) // 2
-            
             merged_img.paste(img, (x, y))
         
-        # 转 Base64
         buf = io.BytesIO()
         merged_img.save(buf, format="PNG")
         b64_str = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"
-        
         return b64_str, merged_img
-
     except Exception as e:
         st.error(f"图片处理出错: {e}")
         return None, None
@@ -236,10 +216,20 @@ with st.sidebar:
 
 # --- 🖥️ 主界面 ---
 
-st.markdown(f"## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v11.5 (自动拼图版)</span>", unsafe_allow_html=True)
+st.markdown(f"## 🏭 Sora 视频工坊 <span style='color:red; font-size:0.8rem;'>v11.6 (多语言扩充版)</span>", unsafe_allow_html=True)
 
 main_col1, main_col2 = st.columns([1, 1.5])
-VOICE_MAP = {"Thai (泰语)": "th-TH-NiwatNeural", "English (英语)": "en-US-ChristopherNeural", "Malay (马来语)": "ms-MY-OsmanNeural"}
+
+# 🔥🔥 核心修改：新增语言支持 🔥🔥
+VOICE_MAP = {
+    "Thai (泰语)": "th-TH-NiwatNeural",
+    "English (英语)": "en-US-ChristopherNeural",
+    "Malay (马来语)": "ms-MY-OsmanNeural",
+    "Indonesian (印尼语)": "id-ID-ArdiNeural",
+    "Vietnamese (越南语)": "vi-VN-NamMinhNeural",
+    "Filipino (菲律宾语)": "fil-PH-AngeloNeural",
+    "Spanish (西班牙语)": "es-ES-AlvaroNeural"
+}
 
 with main_col1:
     st.subheader("1. 创作设置")
@@ -248,14 +238,10 @@ with main_col1:
     batch_dur = int(st.selectbox("时长", ["15s", "10s", "5s"]).replace("s",""))
     size_label = st.selectbox("画质", ["高清 (Large)", "标准 (Small)"])
     
-    # 🖼️ 上传多图
     files = st.file_uploader("参考图 (支持上传多张，系统会自动拼图)", accept_multiple_files=True)
-    
-    # 调用新的处理函数，获取 Base64 和 拼合后的图片对象
     b64_data, merged_img = process_uploaded_images(files)
     
     if merged_img:
-        # 🔥 在界面上显示拼合后的结果，让用户确认
         st.image(merged_img, caption=f"✅ 已自动拼合 {len(files)} 张参考图", use_column_width=True)
 
     st.markdown("---")
@@ -290,7 +276,6 @@ with main_col2:
                 status.write("📡 正在提交任务...")
                 full_p = f"Language: {lang_opt}. Visual: {v_script}. Narrative: {a_script}"
                 
-                # 提交任务时，发送的是拼合后的 b64_data
                 res = submit_video_task(full_p, "sora-2", "16:9", batch_dur, "large" if "高清" in size_label else "small", b64_data)
                 tid = res.get("id")
                 
